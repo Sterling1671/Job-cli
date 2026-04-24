@@ -53,9 +53,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 git clone <your-repo-url>
-cd job-crm
+cd <your-repo-folder>
 uv venv
-uv pip install -r requirements.txt
+uv sync
 ```
 
 **3. Add your Gemini API key**
@@ -83,7 +83,7 @@ Open `Job-Search/masters/master_resume.md` (created automatically on first run) 
 ### See all commands
 
 ```bash
-uv run main.py --help
+uv run scripts/main.py --help
 ```
 
 ---
@@ -93,11 +93,11 @@ uv run main.py --help
 Creates a company folder and generates an AI summary of what they do.
 
 ```bash
-uv run main.py add-company <CompanyName> <url>
+uv run scripts/main.py add-company <CompanyName> <url>
 ```
 
 ```bash
-uv run main.py add-company Stripe https://stripe.com
+uv run scripts/main.py add-company Stripe https://stripe.com
 ```
 
 > If you run `apply` or `email` for a company that doesn't exist yet, it will prompt you to create it on the spot.
@@ -109,11 +109,11 @@ uv run main.py add-company Stripe https://stripe.com
 Scrapes the job posting, generates a tailored resume, and saves everything under the company folder.
 
 ```bash
-uv run main.py apply <CompanyName> "<Job Title>" <url>
+uv run scripts/main.py apply <CompanyName> "<Job Title>" <url>
 ```
 
 ```bash
-uv run main.py apply Stripe "Backend Engineer" https://stripe.com/jobs/listing/123
+uv run scripts/main.py apply Stripe "Backend Engineer" https://stripe.com/jobs/listing/123
 ```
 
 ---
@@ -123,11 +123,11 @@ uv run main.py apply Stripe "Backend Engineer" https://stripe.com/jobs/listing/1
 Picks a template from your `masters/` folder and generates a personalized email for a specific person.
 
 ```bash
-uv run main.py email <CompanyName> "<Person Name>"
+uv run scripts/main.py email <CompanyName> "<Person Name>"
 ```
 
 ```bash
-uv run main.py email Stripe "Jane Smith"
+uv run scripts/main.py email Stripe "Jane Smith"
 ```
 
 You'll be prompted to choose a template and optionally add context notes (e.g. a LinkedIn bio snippet or how you met). If you've emailed this person before, any existing notes in their `context.md` are used automatically.
@@ -155,12 +155,16 @@ I'm a [your role] with experience in [relevant skills] and I'd love to connect..
 ## Project structure
 
 ```
-job-crm/
-├── main.py           # CLI commands (Click)
-├── storage.py        # File system operations
-├── ai.py             # Gemini API calls and web scraping
-├── requirements.txt
+<repo_name>/
+├── scripts/
+│   ├── main.py           # CLI commands (Click)
+│   ├── storage.py        # File system operations
+│   ├── ai.py             # Gemini API calls and web scraping
+├── pyproject.toml
+├── README.md
+├── uv.lock
 ├── .env.example
+├── .python_version
 └── .gitignore
 ```
 

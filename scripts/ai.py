@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from google import genai
 
 
 # ------------------------------------------------------------------ #
@@ -31,11 +31,15 @@ class JobAI:
     """Handles all AI-powered content generation via Gemini."""
 
     def __init__(self, model_name: str = "gemini-2.0-flash") -> None:
-        self.model = genai.GenerativeModel(model_name)
+        self.client = genai.Client()
+        self.model_name = model_name
 
     def _generate(self, prompt: str) -> str:
-        response = self.model.generate_content(prompt)
-        return response.text
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+        )
+        return response.text if response.text is not None else ""
 
     def extract_job_description(self, url: str) -> str:
         """Scrapes a job posting URL and extracts the clean job description."""

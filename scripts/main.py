@@ -1,7 +1,6 @@
 import os
 import click
 from dotenv import load_dotenv
-import google.generativeai as genai
 
 from storage import JobCRM
 from ai import JobAI
@@ -12,11 +11,8 @@ from ai import JobAI
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
+if not os.getenv("GEMINI_API_KEY"):
     raise EnvironmentError("GEMINI_API_KEY is not set. Add it to your .env file.")
-
-genai.configure(api_key=api_key)
 
 crm = JobCRM()
 ai = JobAI()
