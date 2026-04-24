@@ -1,0 +1,14 @@
+[project]
+name = "job-search"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "click>=8.3.3",
+    "google-generativeai>=0.8.6",
+    "pip>=26.0.1",
+    "python-dotenv>=1.2.2",
+    "requests>=2.33.1",
+]
