@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 from storage import JobCRM
 from ai import JobAI
+from autofill import autofill_application
 
 # ------------------------------------------------------------------ #
 # Bootstrap                                                            #
@@ -38,7 +39,64 @@ def _ensure_company(company_name: str) -> None:
         click.echo("  Creating company folder with empty info instead.")
         crm.save_company(company_name, f"# {company_name}\n\nAdd company info here.")
 
+def _ensure_resume(company_name: str, job_title: str, url: str) -> None:
+    """Creates a resume entry if one doesn't already exist."""
+    _ensure_company(company_name)
 
+    if crm.resume_exists(company_name, job_title):
+        return
+
+    if not crm.job_description_exists(company_name, job_title):
+        try:
+            job_description = ai.extract_job_description(url)
+            # click.echo(f"Job Description: {job_description}") # Uncomment for testing
+        except Exception as e:
+            click.echo(f"✗ Could not fetch job description: {e}", err=True)
+            return
+    else:
+        try:
+            job_description = crm.read_job_description(company_name, job_title)
+        except FileNotFoundError as e:
+            click.echo(f"✗ {e}", err=True)
+            return   
+
+    try:
+        master_resume = crm.read_master("master_resume.md")
+    except FileNotFoundError as e:
+        click.echo(f"✗ {e}", err=True)
+        return
+
+    try:
+        resume_template = crm.read_master("resume_template.md")
+    except FileNotFoundError as e:
+        click.echo(f"✗ {e}", err=True)
+        return
+
+    click.echo("  Generating tailored resume...")
+    tailored_resume = ai.tailor_resume(
+        master_resume=master_resume,
+        resume_template=resume_template,
+        job_description=job_description,
+        job_title=job_title,
+        company_name=company_name,
+    )
+
+    app_dir = crm.save_application(
+        company_name=company_name,
+        job_title=job_title,
+        url=url,
+        job_description=job_description,
+        tailored_resume=tailored_resume,
+    )
+    click.echo(f"✓ Application saved to {app_dir}")
+    click.confirm("Please save the .md file to a pdf. Press enter when done",default=True)
+    # Check for PDF before proceeding to browser automation
+    while not crm.resume_pdf_exists(company_name, job_title):
+        click.confirm(
+            f"\n[!] Missing PDF: Please export the tailored resume for {job_title} to PDF.\n"
+            f"Press Enter once the PDF is ready...", 
+            default=True
+        )
 # ------------------------------------------------------------------ #
 # Commands                                                             #
 # ------------------------------------------------------------------ #
@@ -70,50 +128,48 @@ def add_company(company_name: str, url: str) -> None:
         click.echo(f"✗ Error: {e}", err=True)
 
 
+@cli.command("create-resume")
+@click.argument("company_name")
+@click.argument("job_title")
+@click.argument("url")
+def create_resume(company_name: str, job_title: str, url: str) -> None:
+    """Add a resume for a job application.
+
+    Creates the company entry first if it doesn't exist yet.
+
+    Example: python main.py create-resume Stripe "Backend Engineer" https://stripe.com/jobs/123
+    """
+
+    click.echo(f"Processing application for {job_title} at {company_name}...")
+    
+    if crm.resume_exists(company_name, job_title):
+        click.echo("Resume already exists. Skipping.")
+        return
+    
+    _ensure_resume(company_name, job_title, url)
+
+
 @cli.command("apply")
 @click.argument("company_name")
 @click.argument("job_title")
 @click.argument("url")
 def apply(company_name: str, job_title: str, url: str) -> None:
-    """Add a job application for a company.
+    """Add an application for a job application.
 
-    Creates the company entry first if it doesn't exist yet.
+    Creates the company entry and resume first if they don't exist yet.
 
     Example: python main.py apply Stripe "Backend Engineer" https://stripe.com/jobs/123
     """
-    _ensure_company(company_name)
 
     click.echo(f"Processing application for {job_title} at {company_name}...")
 
-    try:
-        job_description = ai.extract_job_description(url)
-    except Exception as e:
-        click.echo(f"✗ Could not fetch job description: {e}", err=True)
-        return
+    _ensure_resume(company_name, job_title, url)
 
-    try:
-        master_resume = crm.read_master("master_resume.md")
-    except FileNotFoundError as e:
-        click.echo(f"✗ {e}", err=True)
-        return
+    click.echo(f"Opening application at {url}...")
+    resume_path = str(crm.get_resume_path(company_name, job_title))
+    profile = crm.read_master("profiles.json")
 
-    click.echo("  Generating tailored resume...")
-    tailored_resume = ai.tailor_resume(
-        master_resume=master_resume,
-        job_description=job_description,
-        job_title=job_title,
-        company_name=company_name,
-    )
-
-    app_dir = crm.save_application(
-        company_name=company_name,
-        job_title=job_title,
-        url=url,
-        job_description=job_description,
-        tailored_resume=tailored_resume,
-    )
-    click.echo(f"✓ Application saved to {app_dir}")
-
+    autofill_application(url, profile, resume_path)
 
 @cli.command("email")
 @click.argument("company_name")
@@ -172,7 +228,37 @@ def email(company_name: str, person_name: str) -> None:
     saved = crm.save_email_draft(company_name, person_name, draft)
     click.echo(f"✓ Email draft saved to {saved}")
 
+@cli.command("tasks")
+def show_tasks():
+    """Scan all contacts and identify pending outreach tasks."""
+    pending = crm.get_pending_tasks() # You'll implement this in storage.py
+    
+    if not pending:
+        click.echo("☀️ No pending tasks! You're all caught up.")
+        return
 
+    for task in pending:
+        click.echo(f"[{task['type'].upper()}] {task['person']} @ {task['company']}")
+        if click.confirm(f"Draft {task['type']} for {task['person']}?"):
+            # 1. Generate the draft using AI
+            draft = ai.draft_email(
+                template=crm.read_master(f"{task['type']}.md"),
+                person_name=task['person'],
+                company_name=task['company'],
+                context_notes=crm.read_person_context(task['company'], task['person'])
+            )
+            
+            # 2. Let the user edit the draft manually
+            edited_draft = click.edit(draft)
+            
+            if edited_draft and click.confirm("Mark as sent and update logs?"):
+                crm.update_interaction_log(
+                    task['company'], 
+                    task['person'], 
+                    task['type'], 
+                    edited_draft
+                )
+                click.echo("✓ Log updated.")
 # ------------------------------------------------------------------ #
 # Entrypoint                                                           #
 # ------------------------------------------------------------------ #

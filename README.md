@@ -56,6 +56,7 @@ git clone <your-repo-url>
 cd <your-repo-folder>
 uv venv
 uv sync
+uv run playwright install chromium
 ```
 
 **3. Add your Gemini API key**
