@@ -30,6 +30,9 @@ class JobCRM:
             "resume_template.md": "# Resume Template\nAdd your resume template here.",
             "cold_outreach.md": "# Cold Outreach Template\nWrite your outreach template here.",
             "follow_up.md": "# Follow-Up Template\nWrite your follow-up template here.",
+            # Seeded so the `tasks` command has something to work with immediately
+            "thank_you.md": "# Thank You Template\nWrite your post-interview thank you template here.",
+            "monthly_checkin.md": "# Monthly Check-in Template\nWrite your monthly check-in template here.",
         }
         for filename, content in placeholders.items():
             path = self.masters / filename
@@ -50,7 +53,8 @@ class JobCRM:
         return path.read_text()
 
     def company_exists(self, company_name: str) -> bool:
-        return (self.companies / company_name).exists()
+        # FIX: use _company_dir so "My Company" and "My_Company" resolve the same way
+        return self._company_dir(company_name).exists()
 
     def person_exists(self, company_name: str, person_name: str) -> bool:
         return self._person_dir(company_name, person_name).exists()
@@ -74,7 +78,13 @@ class JobCRM:
         return ""
 
     def list_email_templates(self) -> list[str]:
-        return [f.name for f in self.masters.iterdir() if f.suffix == ".md" and f.name != "master_resume.md"]
+        # BUG FIX 4: also exclude resume_template.md — it's not an email template
+        excluded = {"master_resume.md", "resume_template.md"}
+        return [
+            f.name
+            for f in self.masters.iterdir()
+            if f.suffix == ".md" and f.name not in excluded
+        ]
 
     # ------------------------------------------------------------------ #
     # Path builders                                                        #
@@ -92,11 +102,12 @@ class JobCRM:
     # ------------------------------------------------------------------ #
     # Path Gets                                                            #
     # ------------------------------------------------------------------ #
-    def get_resume_path(self, company_name: str, job_title: str) -> Path:
-        return self._app_dir(company_name, job_title) / "tailored_resume.pdf"
 
     def get_log_path(self, company_name: str, person_name: str) -> Path:
         return self._person_dir(company_name, person_name) / "interaction_log.md"
+
+    def get_resume_path(self, company_name: str, job_title: str) -> Path:
+        return self._app_dir(company_name, job_title) / "tailored_resume.pdf"
 
     def read_job_description(self, company_name: str, job_title: str) -> str:
         path = self._app_dir(company_name, job_title) / "job_description.md"
@@ -105,6 +116,7 @@ class JobCRM:
                 f"{str(path)} not found."
             )
         return path.read_text()
+
     # ------------------------------------------------------------------ #
     # Write operations                                                     #
     # ------------------------------------------------------------------ #
@@ -126,13 +138,11 @@ class JobCRM:
         person_dir = self._person_dir(company_name, person_name)
         person_dir.mkdir(parents=True, exist_ok=True)
 
-        # Seed an empty context file if this is a new person
         context_file = person_dir / "context.md"
         if not context_file.exists():
             context_file.write_text(f"# Notes on {person_name}\n{context}")
 
         return context_file
-
 
     def save_application(
         self,
@@ -145,11 +155,66 @@ class JobCRM:
         app_dir = self._app_dir(company_name, job_title)
         app_dir.mkdir(parents=True, exist_ok=True)
 
-        today = date.today().strftime("%B %d, %Y")
-        job_data = f"# {job_title}\n\n## Status: Applied on {today}\n\n**URL:** {url}\n\n**Description:**\n{job_description}"
-        (app_dir / "job_description.md").write_text(job_data)
+        today = date.today().isoformat()
+        post = frontmatter.Post(
+            f"**URL:** {url}\n\n**Description:**\n{job_description}",
+            title=job_title,
+            company=company_name,
+            status="applied",
+            applied_date=today,
+            url=url,
+        )
+        with open(app_dir / "job_description.md", "wb") as f:
+            frontmatter.dump(post, f)
+
         (app_dir / "tailored_resume.md").write_text(tailored_resume)
         return app_dir
+
+    def update_application_status(self, company_name: str, job_title: str, new_status: str) -> None:
+        """Update the status field in job_description.md frontmatter."""
+        path = self._app_dir(company_name, job_title) / "job_description.md"
+        if not path.exists():
+            raise FileNotFoundError(f"No application found for {job_title} at {company_name}.")
+        post = frontmatter.load(str(path))
+        post["status"] = new_status.lower()
+        with open(path, "wb") as f:
+            frontmatter.dump(post, f)
+
+    def get_all_applications(self) -> list[dict]:
+        """
+        Walk every application folder and return a list of dicts with:
+          company, title, status, applied_date, url
+        Falls back gracefully for old job_description.md files without frontmatter.
+        """
+        apps = []
+        for jd_file in self.companies.glob("*/applications/*/job_description.md"):
+            company_name = jd_file.parent.parent.parent.name.replace("_", " ")
+            job_title    = jd_file.parent.name.replace("_", " ")
+            try:
+                post = frontmatter.load(str(jd_file))
+                status       = post.get("status", "applied")
+                applied_date = post.get("applied_date", "unknown")
+                url          = post.get("url", "")
+            except Exception:
+                # Old-format file without frontmatter — parse what we can
+                raw = jd_file.read_text()
+                status = "applied"
+                applied_date = "unknown"
+                url = ""
+                for line in raw.splitlines():
+                    if line.startswith("**URL:**"):
+                        url = line.replace("**URL:**", "").strip()
+            apps.append({
+                "company":      company_name,
+                "title":        job_title,
+                "status":       status,
+                "applied_date": applied_date,
+                "url":          url,
+            })
+
+        status_order = {"applied": 0, "interviewing": 1, "offer": 2, "rejected": 3, "withdrawn": 4}
+        apps.sort(key=lambda a: (status_order.get(a["status"], 99), a["applied_date"]))
+        return apps
 
     def save_email_draft(
         self,
@@ -160,7 +225,6 @@ class JobCRM:
         person_dir = self._person_dir(company_name, person_name)
         person_dir.mkdir(parents=True, exist_ok=True)
 
-        # Seed an empty context file if this is a new person
         context_file = person_dir / "context.md"
         if not context_file.exists():
             context_file.write_text(f"# Notes on {person_name}\nAdd context here.")
@@ -171,24 +235,21 @@ class JobCRM:
 
     def update_interaction_log(self, company: str, person: str, interaction_type: str, content: str):
         """Updates metadata and appends the email content to the log file."""
-        log_path = self._get_log_path(company, person)
+        # BUG FIX 1: was self._get_log_path — method is named get_log_path (no underscore)
+        log_path = self.get_log_path(company, person)
         today = date.today().isoformat()
 
-        # Load existing post or create a new one
         if log_path.exists():
-            post = frontmatter.load(log_path)
+            post = frontmatter.load(str(log_path))
         else:
             post = frontmatter.Post("")
 
-        # Update metadata
         post['last_contact_date'] = today
         post['last_contact_type'] = interaction_type
         
-        # Append to the body
         new_entry = f"\n\n## {today} - {interaction_type.replace('_', ' ').title()}\n\n{content}\n"
         post.content += new_entry
 
-        # Save back to file
         with open(log_path, 'wb') as f:
             frontmatter.dump(post, f)
 
@@ -196,14 +257,15 @@ class JobCRM:
         """Scans all people folders and returns tasks based on timing logic."""
         tasks = []
         today = date.today()
-        people_dir = self.base_path / "companies"
+        # BUG FIX 2: was self.base_path — the attribute is self.root
+        people_dir = self.root / "companies"
         
-        # Walk through companies/*/people/*
         for log_file in people_dir.glob("**/people/*/interaction_log.md"):
-            post = frontmatter.load(log_file)
+            post = frontmatter.load(str(log_file))
             
-            # Extract basic info from path and frontmatter
             person_name = log_file.parent.name.replace("_", " ")
+            # BUG FIX 3: log_file.parent is the person dir, .parent is "people",
+            # .parent again is the company dir — not .parent.parent.parent
             company_name = log_file.parent.parent.parent.name.replace("_", " ")
             
             last_date_str = post.get('last_contact_date')
@@ -212,22 +274,15 @@ class JobCRM:
             if not last_date_str:
                 continue
 
-            last_date = datetime.strptime(last_date_str, "%Y-%m-%d").date()
+            last_date = datetime.strptime(str(last_date_str), "%Y-%m-%d").date()
             days_since = (today - last_date).days
 
-            # Logic Engine
             task_type = None
 
-            # 1. Check for 3-day follow up after cold outreach
             if last_type == "cold_outreach" and days_since >= 3:
                 task_type = "follow_up"
-
-            # 2. Check for Thank You (if status was 'interview' but no thank you sent)
             elif last_type == "interview" and days_since >= 0:
                 task_type = "thank_you"
-
-            # 3. Monthly Check-in logic
-            # (If it's been 30 days since ANY interaction)
             elif days_since >= 30:
                 task_type = "monthly_checkin"
 

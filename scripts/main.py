@@ -39,6 +39,7 @@ def _ensure_company(company_name: str) -> None:
         click.echo("  Creating company folder with empty info instead.")
         crm.save_company(company_name, f"# {company_name}\n\nAdd company info here.")
 
+
 def _ensure_resume(company_name: str, job_title: str, url: str) -> None:
     """Creates a resume entry if one doesn't already exist."""
     _ensure_company(company_name)
@@ -49,7 +50,6 @@ def _ensure_resume(company_name: str, job_title: str, url: str) -> None:
     if not crm.job_description_exists(company_name, job_title):
         try:
             job_description = ai.extract_job_description(url)
-            # click.echo(f"Job Description: {job_description}") # Uncomment for testing
         except Exception as e:
             click.echo(f"✗ Could not fetch job description: {e}", err=True)
             return
@@ -58,7 +58,7 @@ def _ensure_resume(company_name: str, job_title: str, url: str) -> None:
             job_description = crm.read_job_description(company_name, job_title)
         except FileNotFoundError as e:
             click.echo(f"✗ {e}", err=True)
-            return   
+            return
 
     try:
         master_resume = crm.read_master("master_resume.md")
@@ -89,14 +89,16 @@ def _ensure_resume(company_name: str, job_title: str, url: str) -> None:
         tailored_resume=tailored_resume,
     )
     click.echo(f"✓ Application saved to {app_dir}")
-    click.confirm("Please save the .md file to a pdf. Press enter when done",default=True)
-    # Check for PDF before proceeding to browser automation
+    click.confirm("Please save the .md file to a pdf. Press enter when done", default=True)
+
     while not crm.resume_pdf_exists(company_name, job_title):
         click.confirm(
             f"\n[!] Missing PDF: Please export the tailored resume for {job_title} to PDF.\n"
-            f"Press Enter once the PDF is ready...", 
-            default=True
+            f"Press Enter once the PDF is ready...",
+            default=True,
         )
+
+
 # ------------------------------------------------------------------ #
 # Commands                                                             #
 # ------------------------------------------------------------------ #
@@ -139,13 +141,12 @@ def create_resume(company_name: str, job_title: str, url: str) -> None:
 
     Example: python main.py create-resume Stripe "Backend Engineer" https://stripe.com/jobs/123
     """
-
     click.echo(f"Processing application for {job_title} at {company_name}...")
-    
+
     if crm.resume_exists(company_name, job_title):
         click.echo("Resume already exists. Skipping.")
         return
-    
+
     _ensure_resume(company_name, job_title, url)
 
 
@@ -154,13 +155,10 @@ def create_resume(company_name: str, job_title: str, url: str) -> None:
 @click.argument("job_title")
 @click.argument("url")
 def apply(company_name: str, job_title: str, url: str) -> None:
-    """Add an application for a job application.
-
-    Creates the company entry and resume first if they don't exist yet.
+    """Apply to a job — creates company/resume if needed, then autofills the form.
 
     Example: python main.py apply Stripe "Backend Engineer" https://stripe.com/jobs/123
     """
-
     click.echo(f"Processing application for {job_title} at {company_name}...")
 
     _ensure_resume(company_name, job_title, url)
@@ -171,22 +169,108 @@ def apply(company_name: str, job_title: str, url: str) -> None:
 
     autofill_application(url, profile, resume_path)
 
+
+@cli.command("status")
+@click.option(
+    "--filter", "status_filter", default=None,
+    help="Show only: applied, interviewing, offer, rejected, withdrawn",
+)
+def show_status(status_filter: str | None) -> None:
+    """Show a dashboard of all applications and their current status.
+
+    Example: python main.py status
+             python main.py status --filter interviewing
+    """
+    apps = crm.get_all_applications()
+
+    if not apps:
+        click.echo("No applications found. Run 'apply' or 'create-resume' to get started.")
+        return
+
+    if status_filter:
+        apps = [a for a in apps if a["status"] == status_filter.lower()]
+        if not apps:
+            click.echo(f"No applications with status '{status_filter}'.")
+            return
+
+    STATUS_STYLES = {
+        "applied":      ("cyan",   "⏳"),
+        "interviewing": ("yellow", "🎙 "),
+        "offer":        ("green",  "🎉"),
+        "rejected":     ("red",    "✗ "),
+        "withdrawn":    ("white",  "–  "),
+    }
+
+    totals: dict[str, int] = {}
+    for a in apps:
+        totals[a["status"]] = totals.get(a["status"], 0) + 1
+
+    click.echo("")
+    click.echo(click.style("  JOB SEARCH DASHBOARD  ", fg="white", bg="blue", bold=True))
+    click.echo("")
+
+    current_company = None
+    for a in sorted(apps, key=lambda x: (x["company"].lower(), x["applied_date"])):
+        if a["company"] != current_company:
+            current_company = a["company"]
+            click.echo(click.style(f"  {current_company}", bold=True))
+
+        color, icon = STATUS_STYLES.get(a["status"], ("white", "? "))
+        status_label = click.style(f"[{a['status'].upper():<12}]", fg=color)
+        date_label   = click.style(a["applied_date"], dim=True)
+        click.echo(f"    {icon} {status_label}  {a['title']:<40}  {date_label}")
+
+    click.echo("")
+    summary_parts = [
+        click.style(f"{v} {k}", fg=STATUS_STYLES.get(k, ("white",))[0])
+        for k, v in totals.items()
+    ]
+    click.echo("  " + "  |  ".join(summary_parts))
+    click.echo("")
+
+
+@cli.command("update-status")
+@click.argument("company_name")
+@click.argument("job_title")
+@click.argument(
+    "new_status",
+    metavar="STATUS",
+    type=click.Choice(
+        ["applied", "interviewing", "offer", "rejected", "withdrawn"],
+        case_sensitive=False,
+    ),
+)
+def update_status(company_name: str, job_title: str, new_status: str) -> None:
+    """Update the pipeline status of an application.
+
+    STATUS: applied | interviewing | offer | rejected | withdrawn
+
+    Example: python main.py update-status Stripe "Backend Engineer" interviewing
+    """
+    try:
+        crm.update_application_status(company_name, job_title, new_status)
+        click.echo(f"✓ {job_title} @ {company_name}  →  {new_status.upper()}")
+    except FileNotFoundError as e:
+        click.echo(f"✗ {e}", err=True)
+
+
 @cli.command("email")
 @click.argument("company_name")
 @click.argument("person_name")
 def email(company_name: str, person_name: str) -> None:
     """Draft an outreach email to a person at a company.
 
-    Creates the company and person entries if they don't exist yet.
-
     Example: python main.py email Stripe "Jane Smith"
     """
     _ensure_company(company_name)
 
-    # Show available templates
     templates = crm.list_email_templates()
     if not templates:
-        click.echo("✗ No email templates found in Job-Search/masters/. Add a .md template file first.", err=True)
+        click.echo(
+            "✗ No email templates found in Job-Search/masters/. "
+            "Add a .md template file first.",
+            err=True,
+        )
         return
 
     click.echo("Available email templates:")
@@ -206,14 +290,14 @@ def email(company_name: str, person_name: str) -> None:
         click.echo(f"✗ {e}", err=True)
         return
 
-    # Read existing context if person already exists
     context_notes = crm.read_person_context(company_name, person_name)
     if context_notes:
         click.echo(f"  Found existing context notes for {person_name}.")
     else:
         click.echo(f"  No existing context for {person_name}.")
         context_notes = click.prompt(
-            "  Add any context notes (LinkedIn bio snippet, how you met, etc.) or press Enter to skip",
+            "  Add any context notes (LinkedIn bio snippet, how you met, etc.) "
+            "or press Enter to skip",
             default="",
         )
 
@@ -228,37 +312,59 @@ def email(company_name: str, person_name: str) -> None:
     saved = crm.save_email_draft(company_name, person_name, draft)
     click.echo(f"✓ Email draft saved to {saved}")
 
+
 @cli.command("tasks")
-def show_tasks():
+def show_tasks() -> None:
     """Scan all contacts and identify pending outreach tasks."""
-    pending = crm.get_pending_tasks() # You'll implement this in storage.py
-    
+    pending = crm.get_pending_tasks()
+
     if not pending:
-        click.echo("☀️ No pending tasks! You're all caught up.")
+        click.echo("☀️  No pending tasks! You're all caught up.")
         return
 
     for task in pending:
-        click.echo(f"[{task['type'].upper()}] {task['person']} @ {task['company']}")
-        if click.confirm(f"Draft {task['type']} for {task['person']}?"):
-            # 1. Generate the draft using AI
-            draft = ai.draft_email(
-                template=crm.read_master(f"{task['type']}.md"),
-                person_name=task['person'],
-                company_name=task['company'],
-                context_notes=crm.read_person_context(task['company'], task['person'])
+        click.echo(
+            f"\n[{task['type'].upper()}] {task['person']} @ {task['company']} "
+            f"({task['days_ago']} day(s) ago)"
+        )
+
+        if not click.confirm(f"  Draft {task['type'].replace('_', ' ')} for {task['person']}?"):
+            continue
+
+        template_filename = f"{task['type']}.md"
+        try:
+            template = crm.read_master(template_filename)
+        except FileNotFoundError:
+            click.echo(
+                f"  ✗ No template found for '{task['type']}'. "
+                f"Add {template_filename} to Job-Search/masters/ and re-run.",
+                err=True,
             )
-            
-            # 2. Let the user edit the draft manually
-            edited_draft = click.edit(draft)
-            
-            if edited_draft and click.confirm("Mark as sent and update logs?"):
-                crm.update_interaction_log(
-                    task['company'], 
-                    task['person'], 
-                    task['type'], 
-                    edited_draft
-                )
-                click.echo("✓ Log updated.")
+            continue
+
+        draft = ai.draft_email(
+            template=template,
+            person_name=task["person"],
+            company_name=task["company"],
+            context_notes=crm.read_person_context(task["company"], task["person"]),
+        )
+
+        edited_draft = click.edit(draft)
+        if edited_draft is None:
+            click.echo("  (No changes made — using original draft.)")
+            edited_draft = draft
+
+        if click.confirm("  Mark as sent and update logs?"):
+            crm.save_person(task["company"], task["person"], context="")
+            crm.update_interaction_log(
+                task["company"],
+                task["person"],
+                task["type"],
+                edited_draft,
+            )
+            click.echo("  ✓ Log updated.")
+
+
 # ------------------------------------------------------------------ #
 # Entrypoint                                                           #
 # ------------------------------------------------------------------ #
