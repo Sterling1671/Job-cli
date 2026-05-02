@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext

@@ -1,7 +1,5 @@
 from pathlib import Path
 from datetime import date, datetime
-import os
-import yaml
 import frontmatter
 
 
